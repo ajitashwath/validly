@@ -107,7 +107,7 @@ export function ApiKeyValidator() {
         <div className="space-y-6">
             <Card className="w-full shadow-lg">
                 <CardHeader>
-                    <CardTitle className="font-space-grotesk">Validly</CardTitle>
+                    <CardTitle className="font-space-grotesk">Validate API</CardTitle>
                     <CardDescription>Select your provider and enter your API key to validate it</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
