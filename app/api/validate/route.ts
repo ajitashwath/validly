@@ -18,7 +18,6 @@ interface TokenUsage {
 const providerConfigs = {
   openai: {
     url: "https://api.openai.com/v1/models",
-    usageUrl: "https://api.openai.com/v1/usage",
     headers: (apiKey: string) => ({
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
@@ -55,137 +54,72 @@ const providerConfigs = {
   },
 }
 
-const generateMockTokenUsage = (provider: Provider) => {
-  const baseUsage = {
-    cohere: { used: 15000, limit: 30000, requestsUsed: 500, requestsLimit: 1500 },
-    llama: { used: 20000, limit: 40000, requestsUsed: 600, requestsLimit: 1800 },
-  }
-
-  if (!(provider in baseUsage)) {
-    return null
-  }
-
-  const usage = baseUsage[provider as keyof typeof baseUsage]
-  const resetDate = new Date()
-  resetDate.setDate(resetDate.getDate() + (30 - resetDate.getDate()))
-
-  return {
-    ...usage,
-    resetDate: resetDate.toISOString(),
-  }
-}
-
 const getOpenAIUsage = async (apiKey: string): Promise<TokenUsage | null> => {
   try {
-    const testResponse = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
+    const subscriptionResponse = await fetch("https://api.openai.com/v1/dashboard/billing/subscription", {
+      method: "GET",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model: "gpt-3.5-turbo",
-        messages: [{ role: "user", content: "test" }],
-        max_tokens: 1,
-        temperature: 0
-      }),
     })
 
-    if (testResponse.ok) {
-      const responseData = await testResponse.json()
-      const rateLimitRequests = testResponse.headers.get('x-ratelimit-limit-requests')
-      const rateLimitTokens = testResponse.headers.get('x-ratelimit-limit-tokens')
-      const remainingRequests = testResponse.headers.get('x-ratelimit-remaining-requests')
-      const remainingTokens = testResponse.headers.get('x-ratelimit-remaining-tokens')
-
-      const now = new Date()
-      const dayOfMonth = now.getDate()
-      const hourOfDay = now.getHours()
-      const isWeekend = now.getDay() === 0 || now.getDay() === 6
-
-      let baseUsage = dayOfMonth * 2500 + hourOfDay * 150
-      if (isWeekend) baseUsage *= 0.6
-
-      const randomVariation = Math.floor(Math.random() * 10000) - 5000
-      const estimatedUsed = Math.max(0, baseUsage + randomVariation)
-
-      let tokenLimit = 1000000
-      let requestLimit = 10000
-
-      if (rateLimitTokens) tokenLimit = parseInt(rateLimitTokens)
-      if (rateLimitRequests) requestLimit = parseInt(rateLimitRequests)
-
-      let finalTokensUsed = estimatedUsed
-      let finalRequestsUsed = Math.floor(estimatedUsed / 25)
-      if (remainingTokens && rateLimitTokens) {
-        finalTokensUsed = parseInt(rateLimitTokens) - parseInt(remainingTokens)
-      }
-      if (remainingRequests && rateLimitRequests) {
-        finalRequestsUsed = parseInt(rateLimitRequests) - parseInt(remainingRequests)
-      }
-
-      const resetDate = new Date(now.getFullYear(), now.getMonth() + 1, 1)
-      resetDate.setHours(0, 0, 0, 0)
-
-      return {
-        used: Math.max(0, finalTokensUsed),
-        limit: tokenLimit,
-        requestsUsed: Math.max(0, finalRequestsUsed),
-        requestsLimit: requestLimit,
-        resetDate: resetDate.toISOString(),
-      }
+    if (!subscriptionResponse.ok) {
+      console.error("Failed to get OpenAI subscription info:", subscriptionResponse.status)
+      return null
     }
 
-    return null
+    const subscriptionData = await subscriptionResponse.json()
+    
+    const now = new Date()
+    const startDate = new Date(now.getFullYear(), now.getMonth(), 1)
+    const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+    
+    const startDateStr = startDate.toISOString().split('T')[0]
+    const endDateStr = endDate.toISOString().split('T')[0]
+
+    const usageResponse = await fetch(
+      `https://api.openai.com/v1/dashboard/billing/usage?start_date=${startDateStr}&end_date=${endDateStr}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+      }
+    )
+
+    if (!usageResponse.ok) {
+      console.error("Failed to get OpenAI usage data:", usageResponse.status)
+      return null
+    }
+
+    const usageData = await usageResponse.json()
+
+    // Calculate total usage in cents and convert to tokens (approximate)
+    const totalAmountCents = usageData.total_usage || 0
+    
+    // Rough conversion: $0.002 per 1K tokens for GPT-3.5, so 1 cent = ~500 tokens
+    const estimatedTokensUsed = Math.floor(totalAmountCents * 500)
+    
+    // Get limits from subscription data
+    const hardLimitUsd = subscriptionData.hard_limit_usd || 100
+    const tokenLimit = Math.floor(hardLimitUsd * 100 * 500) // Convert USD to tokens
+    
+    // Calculate reset date (next month)
+    const resetDate = new Date(now.getFullYear(), now.getMonth() + 1, 1)
+    resetDate.setHours(0, 0, 0, 0)
+
+    return {
+      used: estimatedTokensUsed,
+      limit: tokenLimit,
+      requestsUsed: usageData.daily_costs?.length || 0,
+      requestsLimit: Math.floor(tokenLimit / 100), // Rough estimate
+      resetDate: resetDate.toISOString(),
+    }
+
   } catch (error) {
     console.error("Error checking OpenAI usage:", error)
-    return null
-  }
-}
-
-const getAnthropicUsage = async (apiKey: string): Promise<TokenUsage | null> => {
-  try {
-    const testResponse = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey,
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-3-haiku-20240307",
-        max_tokens: 1,
-        messages: [{ role: "user", content: "test" }]
-      }),
-    })
-
-    if (testResponse.ok) {
-      const responseData = await testResponse.json()
-      const now = new Date()
-      const dayOfMonth = now.getDate()
-      const hourOfDay = now.getHours()
-
-      const baseUsage = 15000 + (dayOfMonth * 800) + (hourOfDay * 50)
-      const randomVariation = Math.floor(Math.random() * 5000) - 2500
-      const estimatedUsed = Math.max(0, baseUsage + randomVariation)
-
-      const limits = [50000, 100000, 250000, 500000]
-      const estimatedLimit = limits[Math.floor(Math.random() * limits.length)]
-
-      const resetDate = new Date(now.getFullYear(), now.getMonth() + 1, 1)
-
-      return {
-        used: estimatedUsed,
-        limit: estimatedLimit,
-        requestsUsed: Math.floor(estimatedUsed / 25), 
-        requestsLimit: Math.floor(estimatedLimit / 15),
-        resetDate: resetDate.toISOString(),
-      }
-    }
-
-    return null
-  } catch (error) {
-    console.error("Error checking Anthropic usage:", error)
     return null
   }
 }
@@ -201,7 +135,7 @@ const getGeminiUsage = async (apiKey: string): Promise<TokenUsage | null> => {
       },
       body: JSON.stringify({
         contents: [{
-          parts: [{ text: "test" }]
+          parts: [{ text: "Hi" }]
         }],
         generationConfig: {
           maxOutputTokens: 1,
@@ -210,53 +144,61 @@ const getGeminiUsage = async (apiKey: string): Promise<TokenUsage | null> => {
       }),
     })
 
-    if (testResponse.ok) {
-      const rateLimitRemaining = testResponse.headers.get('x-ratelimit-remaining')
-      const rateLimitLimit = testResponse.headers.get('x-ratelimit-limit')
+    if (!testResponse.ok) {
+      console.error("Gemini test request failed:", testResponse.status)
+      return null
+    }
 
-      const responseData = await testResponse.json()
+    const rateLimitRemaining = testResponse.headers.get('x-ratelimit-remaining-requests')
+    const rateLimitLimit = testResponse.headers.get('x-ratelimit-limit-requests')
+    const rateLimitReset = testResponse.headers.get('x-ratelimit-reset-requests')
+    
+    const tokenLimitRemaining = testResponse.headers.get('x-ratelimit-remaining-tokens')
+    const tokenLimitTotal = testResponse.headers.get('x-ratelimit-limit-tokens')
 
-      const now = new Date()
-      const dayOfMonth = now.getDate()
-      const hourOfDay = now.getHours()
+    let requestsUsed = 0
+    let requestsLimit = 1500
+    let tokensUsed = 0
+    let tokensLimit = 15000
 
-      let baseUsage, limit
+    if (rateLimitLimit && rateLimitRemaining) {
+      requestsLimit = parseInt(rateLimitLimit)
+      requestsUsed = requestsLimit - parseInt(rateLimitRemaining)
+    }
 
-      if (apiKey.length < 50) {
-        baseUsage = Math.floor(dayOfMonth * 150 + hourOfDay * 25)
-        limit = 15000
-      } else {
-        baseUsage = Math.floor(dayOfMonth * 1200 + hourOfDay * 200)
-        limit = 1000000
+    if (tokenLimitTotal && tokenLimitRemaining) {
+      tokensLimit = parseInt(tokenLimitTotal)
+      tokensUsed = tokensLimit - parseInt(tokenLimitRemaining)
+    }
+    let resetDate = new Date()
+    
+    if (rateLimitReset) {
+      const resetSeconds = parseInt(rateLimitReset)
+      if (resetSeconds > 1000000000) {
+        resetDate = new Date(resetSeconds * 1000)
+      } else { // Relative seconds
+        resetDate = new Date(Date.now() + (resetSeconds * 1000))
       }
-
-      const randomVariation = Math.floor(Math.random() * 3000) - 1500
-      const estimatedUsed = Math.max(0, baseUsage + randomVariation)
-
-      const finalLimit = rateLimitLimit ? parseInt(rateLimitLimit) : limit
-      const remainingQuota = rateLimitRemaining ? parseInt(rateLimitRemaining) : (limit - estimatedUsed)
-      const finalUsed = finalLimit - remainingQuota
-
-      const resetDate = new Date()
-      if (limit === 15000) {
+    } else {
+      if (tokensLimit <= 15000) {
         resetDate.setDate(resetDate.getDate() + 1)
         resetDate.setHours(0, 0, 0, 0)
       } else {
+        // Paid tier - monthly reset
         resetDate.setMonth(resetDate.getMonth() + 1)
         resetDate.setDate(1)
         resetDate.setHours(0, 0, 0, 0)
       }
-
-      return {
-        used: Math.max(0, finalUsed || estimatedUsed),
-        limit: finalLimit,
-        requestsUsed: Math.floor((finalUsed || estimatedUsed) / 20),
-        requestsLimit: Math.floor(finalLimit / 15),
-        resetDate: resetDate.toISOString(),
-      }
     }
 
-    return null
+    return {
+      used: tokensUsed,
+      limit: tokensLimit,
+      requestsUsed: Math.max(0, requestsUsed),
+      requestsLimit: requestsLimit,
+      resetDate: resetDate.toISOString(),
+    }
+
   } catch (error) {
     console.error("Error checking Gemini usage:", error)
     return null
@@ -267,12 +209,14 @@ const getRealTimeUsage = async (provider: Provider, apiKey: string): Promise<Tok
   switch (provider) {
     case "openai":
       return await getOpenAIUsage(apiKey)
-    case "anthropic":
-      return await getAnthropicUsage(apiKey)
     case "gemini":
       return await getGeminiUsage(apiKey)
+    case "anthropic":
+    case "cohere":
+    case "llama":
+      return null
     default:
-      return generateMockTokenUsage(provider)
+      return null
   }
 }
 
@@ -308,11 +252,9 @@ export async function POST(request: NextRequest) {
     if (response.ok) {
       const tokenUsage = await getRealTimeUsage(provider, apiKey.trim())
 
-      const finalTokenUsage = tokenUsage || generateMockTokenUsage(provider)
-
       return NextResponse.json({
         isValid: true,
-        tokenUsage: finalTokenUsage,
+        tokenUsage: tokenUsage,
         hasRealTimeData: tokenUsage !== null,
       })
     } else {
