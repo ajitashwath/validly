@@ -118,7 +118,6 @@ export function ApiKeyValidator() {
                                 <SelectValue>
                                     <div className="flex flex-col items-start">
                                         <span className="font-medium">{providerNames[provider]}</span>
-                                        <span className="text-xs text-muted-foreground">{providerDescriptions[provider]}</span>
                                     </div>
                                 </SelectValue>
                             </SelectTrigger>

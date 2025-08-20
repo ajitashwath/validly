@@ -44,7 +44,7 @@ export default function Home() {
             <div className="flex items-center justify-center gap-2">
               <Github className="h-4 w-4" />
               <a
-                href="https://github.com/ajitashwath/api-validator"
+                href="https://github.com/ajitashwath/validly"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-sm text-muted-foreground hover:text-foreground transition-colors"
